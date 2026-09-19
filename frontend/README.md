@@ -256,6 +256,118 @@ its 20-plate height leaves two plates that no 3-plate brick can fill.
 - Very thin features (under half a LEGO cell) still disappear in the voxel to
   LEGO resampling.
 
+## Image → 3D reconstruction (Milestone 7)
+
+M7 adds the first real image-input stage in front of the existing pipeline.
+It does not touch M1–M6: it produces an ordinary `VoxelGrid` and hands it to
+the unmodified M6 decomposer.
+
+```text
+uploaded image -> reconstruction (src/reconstruction) -> VoxelGrid (src/voxel)
+               -> existing M6 decomposer -> LEGO model -> existing LDraw renderer
+```
+
+**What "3D reconstruction" means here - please read before judging the demo.**
+This is a deterministic **2.5D approximation**, not photogrammetry and not a
+learned monocular-depth model. A single photograph does not contain enough
+information to recover an object's true back surface. Instead, the object's
+*silhouette* is inflated into a plausible rounded volume: pixels near the
+centre of the silhouette bulge more than pixels near its edge, using each
+pixel's distance to the silhouette boundary as a proxy for depth (a classic
+"shape from silhouette" trick, sometimes called silhouette inflation).
+Brightness contributes a small secondary shift, per pixel, so flat, uniform
+extrusion isn't the whole story - but it is a minor effect layered on top of
+the silhouette shape, not a real depth estimate. The result looks
+convincingly 3D for the intended input (a single rounded/boxy object such as
+a mug, bottle, toy, shoe or small appliance) and is honestly *not* a claim
+that Brickify has solved general single-image 3D reconstruction.
+
+**Why classical CV instead of a browser ML depth model.** An in-browser
+monocular depth model (Option A in the milestone brief) was considered, but
+introducing a new model dependency and a runtime download creates exactly
+the kind of fragility - a model that can fail to fetch, a bundle size
+regression, an unpredictable first-run delay - the milestone brief asks to
+avoid. The classical approach needs no new dependency, cannot fail to
+"load" (there is no model to load), runs in a few tens of milliseconds even
+on a large photo, and is fully deterministic, which makes it possible to
+unit test the geometry logic without a browser or any ML runtime. Per the
+milestone's own priority order, a simple approximation that reliably looks
+good in a live demo beats a fancier one that might not.
+
+**Pipeline, module by module** (`src/reconstruction/`):
+
+- `imagePreprocessing.js` - the only module that touches browser APIs
+  (canvas, `Image`/`createImageBitmap`). Validates the uploaded file's type
+  and size, decodes it, and resizes it (preserving aspect ratio) so
+  processing never runs on a full-resolution photo.
+- `segmentation.js` - foreground/background silhouette extraction. Three
+  strategies, tried in order of reliability: (1) the image's own alpha
+  channel, if it carries real transparency; (2) colour-distance from an
+  estimated background (sampled from the frame's border, matching the
+  "single object, simple background" brief); (3) a centred, image-shaped
+  ellipse fallback if neither finds a plausible object, so the demo stays
+  driven by the photo instead of failing outright.
+- `depthField.js` - turns the flat silhouette into a per-pixel depth field
+  via a distance transform (how far each pixel is from the silhouette's own
+  edge), plus a small brightness-driven offset.
+- `depthToVoxels.js` - the one place this layer touches `src/voxel`: resamples
+  the mask/depth fields to the target voxel resolution and writes an ordinary
+  `VoxelGrid`, extruding each silhouette column symmetrically around a
+  mid-plane by an amount driven by its depth field value.
+- `voxelCleanup.js` - three small, deterministic passes (fill cells fully
+  surrounded by occupied neighbours, drop voxels with no occupied neighbours,
+  keep only the largest connected component) instead of a mesh-processing
+  framework.
+- `reconstructFromImage.js` - orchestrates the above; `reconstructVoxelGridFromImageData`
+  is the pure half (no browser APIs) that the test suite exercises directly.
+
+**Layer boundary.** `src/reconstruction` may depend on `src/voxel` and its own
+siblings only - never React, Three.js, LDraw, or `src/decomposition`. Checked
+mechanically by `src/reconstruction/tests/architecture.test.js`, the same
+pattern as the M5/M6 boundary test.
+
+**Voxel resolution.** The output grid's longest side is capped at 40 voxels
+by default (configurable, 32-64 is the sensible range) at `voxelSize = 0.2`
+- the same size the rest of the app uses, so a reconstructed object lines up
+with the LEGO grid exactly like the M4 demo shapes do.
+
+**Background handling.** Handled by segmentation (above): alpha channel when
+present, otherwise colour-distance from the frame's border, with an ellipse
+fallback. There is no attempt at general-purpose background removal for
+cluttered or multi-object scenes - that is explicitly out of scope for this
+milestone (see "Limitations" below).
+
+**Status reporting.** The UI shows `Loading image… / Processing image… /
+Reconstructing 3D shape… / Generating voxels… / Complete / Error` as the
+pipeline runs (`RECONSTRUCTION_STATUS` in `reconstructionTypes.js`), so a
+slow decode on a large photo doesn't look like a frozen tab.
+
+**Errors handled explicitly**, each with a distinct `ReconstructionError`
+code: invalid/empty file, unsupported format, file too large, decoded image
+too large, decode failure, and "no object found" (an empty result after
+segmentation and cleanup). Every error surfaces as a message in the UI
+panel; none crash the React app.
+
+**Demo.** The *Image → LEGO* tab. Upload a PNG/JPEG/WebP, click *Reconstruct*
+to see the 3D voxel approximation, then *Convert to LEGO* to run the
+unmodified M6 decomposer on it. The "Show" dropdown switches between the two,
+the same way the Decompose tab does between its voxel target and LEGO result.
+
+**Known limitations.**
+
+- 2.5D, not real 3D: no notion of concavities, occlusion, or an object's
+  actual back surface. Two very different objects with the same silhouette
+  reconstruct identically.
+- Designed for one object on a reasonably plain background. Cluttered
+  scenes, multiple objects, busy backgrounds, and low-contrast subjects (an
+  object close in colour to its background) will segment poorly.
+- The colour-distance fallback samples the image's border as "background",
+  so a subject that touches or fills the frame edge can confuse segmentation.
+- No attempt to make the reconstruction upright/canonical beyond what the
+  photo itself shows - a tilted photo produces a tilted reconstruction.
+- Like M6, colour is not part of the problem yet; reconstructed models use
+  the same single default brick colour.
+
 ## Tests
 
 ```bash
@@ -264,4 +376,7 @@ npm test        # node's built-in test runner, no extra dependencies
 
 Tests cover the voxel layer, the decomposition layer (brick catalog, mapping,
 placement, rotation, scoring, overlap, support, coverage, determinism,
-staircase positioning) and the layer boundaries.
+staircase positioning), the reconstruction layer (silhouette extraction,
+distance transform/depth field, mask/depth → VoxelGrid conversion, voxel
+cleanup, and an end-to-end reconstruction → M6 decomposition integration
+test), and the layer boundaries for all three layers.

@@ -1,16 +1,20 @@
 import { useState } from "react";
 import DecomposeDemo from "./components/DecomposeDemo.jsx";
+import ImageToLegoDemo from "./components/ImageToLegoDemo.jsx";
 import LEGOViewer from "./components/LEGOViewer.jsx";
 import VoxelDemo from "./components/VoxelDemo.jsx";
 import { testModel } from "./lego/model.js";
 
-// Three views, selectable for development. "Decompose" is the one that joins
-// the voxel layer (src/voxel) to the LEGO layer (src/lego), via the
-// decomposition layer (src/decomposition); the other two stay standalone.
+// Four views, selectable for development. "Decompose" joins the voxel layer
+// (src/voxel) to the LEGO layer (src/lego), via the decomposition layer
+// (src/decomposition). "Image → LEGO" (Milestone 7) adds a reconstruction
+// layer (src/reconstruction) in front of that same pipeline: image -> voxels
+// -> the same M6 decomposer -> the same LDraw renderer.
 const MODES = [
   { id: "lego", label: "LEGO Model", subtitle: "3D LEGO brick viewer" },
   { id: "voxel", label: "Voxel Demo", subtitle: "3D voxel grid (no LEGO)" },
   { id: "decompose", label: "Decompose", subtitle: "voxels → LEGO bricks (3001)" },
+  { id: "image", label: "Image → LEGO", subtitle: "photo → 3D reconstruction → LEGO" },
 ];
 const DEFAULT_MODE = "decompose";
 
@@ -49,6 +53,7 @@ export default function App() {
       )}
       {mode === "voxel" && <VoxelDemo />}
       {mode === "decompose" && <DecomposeDemo />}
+      {mode === "image" && <ImageToLegoDemo />}
     </main>
   );
 }
