@@ -3,7 +3,8 @@ import { describe, it } from "node:test";
 import { assertValidModel, validateModel } from "../lego/modelValidation.js";
 import { VoxelGrid } from "../voxel/VoxelGrid.js";
 import { voxelizeSphere } from "../voxel/voxelizeSphere.js";
-import { brickCells, PART_3001 } from "./brickPlacement.js";
+import { getBrickDefinition } from "./brickCatalog.js";
+import { brickCells } from "./brickPlacement.js";
 import { decomposeOccupancy, decomposeVoxelGrid } from "./decomposer.js";
 import { findOverlaps, validateDecompositionResult } from "./decompositionValidation.js";
 import { getDecompositionShape, voxelizeLegoBox } from "./demoShapes.js";
@@ -14,10 +15,11 @@ const VOXEL_SIZE = 0.2; // 5 voxels per stud, 2 per plate
 /** Snapshot of a grid's occupancy, for mutation checks. */
 const snapshot = (grid) => grid.getOccupiedVoxels().map(({ x, y, z }) => `${x},${y},${z}`).join("|");
 
-/** Every LEGO cell used by a list of bricks. */
+/** Every LEGO cell used by a list of bricks (any catalog part). */
 function occupiedCellKeys(bricks) {
   return bricks.flatMap((brick) =>
-    brickCells(PART_3001, brick.position, brick.rotation).map(({ x, y, z }) => `${x},${y},${z}`),
+    brickCells(getBrickDefinition(brick.partId), brick.position, brick.rotation)
+      .map(({ x, y, z }) => `${x},${y},${z}`),
   );
 }
 
@@ -114,7 +116,7 @@ describe("decomposeVoxelGrid: invariants", () => {
   });
 
   it("never lets bricks overlap, on any demo shape", () => {
-    for (const id of ["exact-slab", "sphere", "cube", "cylinder", "staircase"]) {
+    for (const id of ["exact-slab", "exact-staircase", "sphere", "cube", "cylinder", "staircase"]) {
       const grid = getDecompositionShape(id).generate({ voxelSize: 0.5 });
       const result = decomposeVoxelGrid(grid);
 
@@ -154,10 +156,10 @@ describe("decomposeVoxelGrid: invariants", () => {
     assert.ok(result.coverageRatio > 0 && result.coverageRatio <= 1);
   });
 
-  it("uses a single default colour and the only supported part", () => {
+  it("uses a single default colour and only catalog parts", () => {
     const result = decomposeVoxelGrid(voxelizeLegoBox({ studsX: 4, studsZ: 4, plates: 6, voxelSize: VOXEL_SIZE }));
     assert.equal(new Set(result.bricks.map((b) => b.color)).size, 1);
-    assert.ok(result.bricks.every((b) => b.partId === "3001"));
+    assert.ok(result.bricks.every((b) => getBrickDefinition(b.partId) !== null));
     assert.ok(result.bricks.every((b) => [0, 90].includes(b.rotation)));
   });
 
@@ -210,12 +212,23 @@ describe("decomposeVoxelGrid: edge cases", () => {
     assert.deepEqual(result.uncoveredVoxels, [{ x: 0, y: 0, z: 0 }]);
   });
 
-  it("handles a shape smaller than one 3001 brick", () => {
+  it("builds a shape smaller than a 2x4 from a smaller catalog part", () => {
+    // Milestone 5 left this empty (only 3001 existed); M6 has a 1x2.
     const grid = voxelizeLegoBox({ studsX: 1, studsZ: 2, plates: 3, voxelSize: VOXEL_SIZE });
     const result = decomposeVoxelGrid(grid);
 
-    assert.deepEqual(result.bricks, []);
-    assert.equal(result.coverageRatio, 0);
+    assert.equal(result.bricks.length, 1);
+    assert.equal(result.bricks[0].partId, "3004");
+    assert.equal(result.coverageRatio, 1);
+  });
+
+  it("uses a 1x1 for a single-stud shape", () => {
+    const grid = voxelizeLegoBox({ studsX: 1, studsZ: 1, plates: 3, voxelSize: VOXEL_SIZE });
+    const result = decomposeVoxelGrid(grid);
+
+    assert.equal(result.bricks.length, 1);
+    assert.equal(result.bricks[0].partId, "3005");
+    assert.equal(result.coverageRatio, 1);
   });
 
   it("handles a shape shorter than one brick and says why", () => {
@@ -259,6 +272,7 @@ describe("decomposeVoxelGrid: edge cases", () => {
   });
 
   it("handles a sparse shape without crashing", () => {
+    // Isolated voxels: too thin to fill even one LEGO cell past the 50% rule.
     const grid = new VoxelGrid(20, 20, 20, { voxelSize: VOXEL_SIZE });
     for (let i = 0; i < 20; i += 3) grid.set(i, i, i, true);
     const result = decomposeVoxelGrid(grid);
@@ -314,5 +328,156 @@ describe("decomposeOccupancy", () => {
     assert.equal(bricks.length, 1);
     assert.equal(bricks[0].rotation, 90);
     assert.deepEqual(bricks[0].position, { x: 0, y: 0, z: 0 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Milestone 6: multiple brick sizes, boundary accuracy, staircase alignment
+// ---------------------------------------------------------------------------
+
+describe("decomposeVoxelGrid: multiple brick sizes", () => {
+  it("still solves the exact 2x4 target with a single 3001", () => {
+    const result = decomposeVoxelGrid(voxelizeLegoBox({ studsX: 2, studsZ: 4, plates: 3, voxelSize: VOXEL_SIZE }));
+    assert.deepEqual(result.bricks.map((b) => b.partId), ["3001"]);
+    assert.equal(result.coverageRatio, 1);
+  });
+
+  it("still tiles the exact 4x4 target with two 2x4 bricks", () => {
+    const result = decomposeVoxelGrid(voxelizeLegoBox({ studsX: 4, studsZ: 4, plates: 3, voxelSize: VOXEL_SIZE }));
+    assert.equal(result.bricks.length, 2);
+    assert.deepEqual(result.bricks.map((b) => b.partId), ["3001", "3001"]);
+    assert.equal(result.coverageRatio, 1);
+    assert.deepEqual(findOverlaps(result.bricks), []);
+  });
+
+  it("reaches for smaller bricks on an irregular shape", () => {
+    // A T: 3 studs along X at z = 0, plus one stud sticking out at (1, 1).
+    // Nothing bigger than a 1x2 fits, and the odd cells need 1x1s.
+    const target = new LegoOccupancy(3, 3, 2);
+    for (let y = 0; y < 3; y++) {
+      for (let x = 0; x < 3; x++) target.set(x, y, 0, true);
+      target.set(1, y, 1, true);
+    }
+    const { bricks, placed } = decomposeOccupancy(target);
+    const used = new Set(bricks.map((b) => b.partId));
+
+    assert.equal(placed.count, target.count, "the whole L is built");
+    assert.ok(used.has("3005"), `expected a 1x1, got ${[...used].join(", ")}`);
+    assert.ok(used.has("3004"), `expected a 1x2, got ${[...used].join(", ")}`);
+    assert.ok(!used.has("3001"), "a 2x4 cannot fit in a shape this thin");
+  });
+
+  it("prefers one large brick over several small ones where both fit", () => {
+    const result = decomposeVoxelGrid(voxelizeLegoBox({ studsX: 2, studsZ: 4, plates: 3, voxelSize: VOXEL_SIZE }));
+    assert.equal(result.bricks.length, 1, "should not be split into 1x2s");
+    assert.equal(result.stats.brickCounts["3001"], 1);
+    assert.equal(result.stats.brickCounts["3005"], 0);
+  });
+
+  it("reports a per-part breakdown that adds up", () => {
+    const result = decomposeVoxelGrid(getDecompositionShape("sphere").generate({ voxelSize: 0.5 }));
+    const total = Object.values(result.stats.brickCounts).reduce((sum, n) => sum + n, 0);
+    assert.equal(total, result.bricks.length);
+    for (const [partId, count] of Object.entries(result.stats.brickCounts)) {
+      assert.equal(count, result.bricks.filter((b) => b.partId === partId).length, partId);
+    }
+  });
+});
+
+describe("decomposeVoxelGrid: boundary accuracy", () => {
+  it("keeps every brick inside the target by default (no false positives)", () => {
+    for (const id of ["sphere", "cylinder", "staircase"]) {
+      const result = decomposeVoxelGrid(getDecompositionShape(id).generate({ voxelSize: 0.5 }));
+      assert.equal(result.stats.falsePositiveCells, 0, `${id} bulges outside the shape`);
+      assert.equal(result.stats.coveredCells, result.stats.filledCells, id);
+    }
+  });
+
+  it("counts stray cells honestly when overhang is allowed", () => {
+    const grid = getDecompositionShape("sphere").generate({ voxelSize: 0.5 });
+    const loose = decomposeVoxelGrid(grid, { maxOutsideRatio: 0.25 });
+
+    assert.ok(loose.stats.falsePositiveCells > 0, "some bricks should now overhang");
+    assert.equal(loose.stats.filledCells - loose.stats.coveredCells, loose.stats.falsePositiveCells);
+    assert.deepEqual(findOverlaps(loose.bricks), []);
+  });
+
+  it("rejects an out-of-range maxOutsideRatio", () => {
+    const grid = voxelizeLegoBox({ voxelSize: VOXEL_SIZE });
+    assert.throws(() => decomposeVoxelGrid(grid, { maxOutsideRatio: -1 }), RangeError);
+    assert.throws(() => decomposeVoxelGrid(grid, { maxOutsideRatio: 1 }), RangeError);
+  });
+
+  it("materially improves the sphere over the 2x4-only baseline", () => {
+    // Milestone 5 (3001 only) managed 57.3% on this sphere. The catalog must
+    // not regress that; the threshold is set from the measured M6 result with
+    // headroom, so it catches a regression without being brittle.
+    const grid = getDecompositionShape("sphere").generate({ voxelSize: 0.2 });
+    const result = decomposeVoxelGrid(grid);
+
+    assert.ok(result.coverageRatio > 0.8, `sphere coverage regressed to ${result.coverageRatio}`);
+    assert.ok(result.stats.falsePositiveCells === 0, "the silhouette must not grow");
+    const smallBricks = result.stats.brickCounts["3003"] + result.stats.brickCounts["3004"] +
+      result.stats.brickCounts["3005"];
+    assert.ok(smallBricks > 0, "small bricks should be doing the boundary work");
+    assert.ok(result.stats.brickCounts["3001"] > 0, "large bricks should still fill the interior");
+  });
+});
+
+describe("decomposeVoxelGrid: staircase positioning", () => {
+  /** The occupied x range of one LEGO course, as [min, max] or null. */
+  function courseExtent(result, y) {
+    let min = Infinity;
+    let max = -Infinity;
+    for (const { x, y: cy, z } of result.placed.occupiedCells()) {
+      if (cy !== y || z !== 0) continue;
+      min = Math.min(min, x);
+      max = Math.max(max, x);
+    }
+    return min === Infinity ? null : [min, max];
+  }
+
+  it("places each step of a LEGO-aligned staircase exactly where it belongs", () => {
+    // 4 steps, 2 studs of tread each, one brick course of rise each.
+    const grid = getDecompositionShape("exact-staircase").generate({ voxelSize: 0.2 });
+    const result = decomposeVoxelGrid(grid);
+
+    assert.equal(result.coverageRatio, 1, "an aligned staircase is exactly representable");
+    assert.equal(result.stats.falsePositiveCells, 0);
+
+    // Course k must span x = 2k .. 7: the tread edge advances by exactly 2
+    // studs per course, with no drift toward +X.
+    for (let course = 0; course < 4; course++) {
+      assert.deepEqual(courseExtent(result, course * 3), [course * 2, 7], `course ${course}`);
+    }
+  });
+
+  it("converts an unaligned staircase without drifting along +X", () => {
+    // 1.5-stud treads cannot land on stud boundaries, so every step edge falls
+    // inside a LEGO cell and has to be quantised. The rule is "follow the shape
+    // at the cell's centre". Milestone 5 rounded an exactly-half-full cell UP,
+    // which disagreed with that in 3 cells - each one pushing a tread further
+    // along +X or one plate higher than the voxels justify. This is the
+    // regression test for that fix.
+    const params = { steps: 6, stepRun: 1.5, stepRise: 1, width: 4 };
+    const grid = getDecompositionShape("staircase").generate({ voxelSize: 0.2 });
+    const { target } = decomposeVoxelGrid(grid);
+
+    const mismatches = [];
+    for (let y = 0; y < target.sizeY; y++) {
+      for (let z = 0; z < target.sizeZ; z++) {
+        for (let x = 0; x < target.sizeX; x++) {
+          const step = Math.floor(((x + 0.5) * 1) / params.stepRun);
+          const expected = (y + 0.5) * 0.4 < (step + 1) * params.stepRise;
+          if (target.get(x, y, z) !== expected) mismatches.push(`(${x},${y},${z})`);
+        }
+      }
+    }
+    assert.deepEqual(mismatches, [], "LEGO cells disagree with the staircase surface");
+  });
+
+  it("is deterministic for the staircase", () => {
+    const build = () => decomposeVoxelGrid(getDecompositionShape("exact-staircase").generate({ voxelSize: 0.2 }));
+    assert.equal(JSON.stringify(build().bricks), JSON.stringify(build().bricks));
   });
 });

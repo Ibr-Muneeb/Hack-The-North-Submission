@@ -4,33 +4,23 @@
  *
  * Pure data in, pure data out. Given a LEGO occupancy grid (the target shape),
  * a grid of already-placed cells, and a candidate placement, decide whether
- * the brick may go there and how good that placement is.
+ * the brick may go there and measure how well it fits. Scoring itself lives
+ * next door in candidateScoring.js; this file only produces the measurements.
  *
  * Nothing here knows about React, Three.js, LDraw or materials.
  *
- * ---- The only supported part (Milestone 5) ------------------------------
+ * ---- Supported parts ----------------------------------------------------
  *
- *   3001 - the standard 2x4 brick: 2 studs x 4 studs x 3 plates.
- *
- * NOTE ON width/depth: the existing LEGO model format (src/lego/coordinates.js
- * and src/lego/model.js) already fixes the convention for a 2x4 brick as
- * `width: 2, depth: 4` - i.e. at rotation 0 the part spans 2 studs along X
- * and 4 along Z, which is how the LDraw geometry for 3001 actually loads.
- * We follow the existing convention rather than inventing a new one; the
- * "4 studs along X" orientation is simply rotation 90 (see `footprint`).
+ * Whatever brickCatalog.js lists: 3001 (2x4), 3003 (2x2), 3004 (1x2) and
+ * 3005 (1x1). Dimensions are never repeated here - ask the catalog.
  *
  * ---- Rotation -----------------------------------------------------------
  *
  * Only 0 / 90 / 180 / 270 degrees about Y. `position` is the MIN CORNER of
- * the ROTATED footprint (existing convention), so:
- *
- *   rotation 0 or 180 -> occupies 2 cells along X, 4 along Z
- *   rotation 90 or 270 -> occupies 4 cells along X, 2 along Z
- *
- * Because a 2x4 brick is symmetric about its centre, 0 and 180 occupy exactly
- * the same cells, as do 90 and 270. All four are accepted and handled
- * correctly; the decomposer only ENUMERATES 0 and 90, since the other two
- * would be duplicate candidates (see decomposer.js).
+ * the ROTATED footprint (existing convention), so a 2x4 at rotation 0 or 180
+ * occupies 2 cells along X and 4 along Z, and at 90 or 270 the other way
+ * round. All four are accepted here; the catalog decides which ones are worth
+ * GENERATING, dropping rotations that repeat a footprint.
  *
  * ---- Support (deliberately simple) --------------------------------------
  *
@@ -59,27 +49,28 @@
  * stud/tube connection simulation, no centre of mass, no toppling.
  */
 
-import { BRICK_PLATES, footprint } from "../lego/coordinates.js";
+import { footprint } from "../lego/coordinates.js";
+import { BRICK_CATALOG, getBrickDefinition, PART_3001 } from "./brickCatalog.js";
 import { LegoOccupancy } from "./LegoOccupancy.js";
 
-/** The only part this milestone can place. Shape matches the LEGO model format. */
-export const PART_3001 = Object.freeze({
-  partId: "3001",
-  type: "brick",
-  width: 2,
-  depth: 4,
-  height: BRICK_PLATES,
-});
-
-export const SUPPORTED_PARTS = Object.freeze({ 3001: PART_3001 });
+export { PART_3001 };
 
 export const VALID_ROTATIONS = Object.freeze([0, 90, 180, 270]);
 
-/** Rotations that produce distinct footprints for a 2x4 (see module docs). */
+/** Rotations that produce distinct footprints for an oblong brick. */
 export const DISTINCT_ROTATIONS = Object.freeze([0, 90]);
 
 /** Fraction of the footprint that must be supported from below. */
 export const MIN_SUPPORT_RATIO = 0.25;
+
+/**
+ * How much of a brick may stick out of the target shape, as a fraction of its
+ * footprint volume. 0 means strict containment (the Milestone 5 rule): a brick
+ * may only go where the target shape actually is. The decomposer raises this a
+ * little so boundary cells can be filled, and penalises every stray cell in
+ * the score - see candidateScoring.js.
+ */
+export const DEFAULT_MAX_OUTSIDE_RATIO = 0;
 
 /** Rejection reasons returned by canPlaceBrick. */
 export const REJECTED = Object.freeze({
@@ -88,14 +79,18 @@ export const REJECTED = Object.freeze({
   POSITION: "invalid-position",
   BOUNDS: "out-of-bounds",
   OUTSIDE_TARGET: "outside-target",
+  TOO_MUCH_OUTSIDE: "too-much-outside-target",
   OVERLAP: "overlap",
   UNSUPPORTED: "unsupported",
 });
 
 /** The part definition for a placement, or null if it isn't one we support. */
 export function getPart(partId) {
-  return SUPPORTED_PARTS[partId] ?? null;
+  return getBrickDefinition(partId);
 }
+
+/** Every part id the placement rules accept, in catalog order. */
+export const SUPPORTED_PART_IDS = Object.freeze(BRICK_CATALOG.map((brick) => brick.partId));
 
 export function isValidRotation(rotation) {
   return VALID_ROTATIONS.includes(rotation);
@@ -175,24 +170,6 @@ export function neighbourContacts(placed, cells) {
   return contacts;
 }
 
-/**
- * Score a valid placement. Strict priority order, encoded as integer bands so
- * a better primary term can never be outweighed by the lower ones:
- *
- *   1. newly covered target cells   (x 1,000,000)
- *   2. support underneath           (0..1000, x 100)
- *   3. neighbouring placed cells    (0..99)
- *
- * Deterministic: same inputs -> same number, no randomness anywhere.
- */
-export function scorePlacement({ newlyCovered, support, contacts }) {
-  return (
-    newlyCovered * 1_000_000 +
-    Math.round(Math.min(1, Math.max(0, support)) * 1000) * 100 +
-    Math.min(99, contacts)
-  );
-}
-
 function normalizeContext(context) {
   if (context instanceof LegoOccupancy) return { target: context, placed: null };
   if (!context || typeof context !== "object") {
@@ -214,15 +191,23 @@ function normalizeContext(context) {
  * @param {object} [options]
  * @param {boolean} [options.requireSupport=true]
  * @param {number}  [options.minSupportRatio=MIN_SUPPORT_RATIO]
+ * @param {number}  [options.maxOutsideRatio=0]  fraction of the brick allowed
+ *        to fall outside the target shape; 0 = strict containment
  * @returns {{ok: boolean, reason: string|null, cells: Array, support: number,
- *            newlyCovered: number, contacts: number, score: number}}
+ *            footing: number, covered: number, outside: number, fit: number,
+ *            newlyCovered: number, contacts: number}}
  */
 export function canPlaceBrick(context, placement, options = {}) {
   const { target, placed } = normalizeContext(context);
-  const { requireSupport = true, minSupportRatio = MIN_SUPPORT_RATIO } = options;
+  const {
+    requireSupport = true,
+    minSupportRatio = MIN_SUPPORT_RATIO,
+    maxOutsideRatio = DEFAULT_MAX_OUTSIDE_RATIO,
+  } = options;
 
   const reject = (reason) => ({
-    ok: false, reason, cells: [], support: 0, footing: 0, newlyCovered: 0, contacts: 0, score: -1,
+    ok: false, reason, cells: [],
+    support: 0, footing: 0, newlyCovered: 0, covered: 0, outside: 0, fit: 0, contacts: 0,
   });
 
   const part = getPart(placement?.partId);
@@ -244,8 +229,15 @@ export function canPlaceBrick(context, placement, options = {}) {
   for (const { x, y, z } of cells) {
     if (!target.isInBounds(x, y, z)) return reject(REJECTED.BOUNDS);
   }
+  let covered = 0;
   for (const { x, y, z } of cells) {
-    if (!target.get(x, y, z)) return reject(REJECTED.OUTSIDE_TARGET);
+    if (target.get(x, y, z)) covered++;
+  }
+  const outside = cells.length - covered;
+  if (outside > 0) {
+    // maxOutsideRatio 0 is the strict Milestone 5 rule: stay inside the shape.
+    if (maxOutsideRatio <= 0) return reject(REJECTED.OUTSIDE_TARGET);
+    if (outside / cells.length > maxOutsideRatio + 1e-9) return reject(REJECTED.TOO_MUCH_OUTSIDE);
   }
   if (placed) {
     for (const { x, y, z } of cells) {
@@ -257,7 +249,9 @@ export function canPlaceBrick(context, placement, options = {}) {
   if (requireSupport && footing < minSupportRatio) return reject(REJECTED.UNSUPPORTED);
 
   const support = supportRatio(placed, part, position, rotation);
-  const newlyCovered = placed ? cells.filter(({ x, y, z }) => !placed.get(x, y, z)).length : cells.length;
+  const newlyCovered = placed
+    ? cells.filter(({ x, y, z }) => target.get(x, y, z) && !placed.get(x, y, z)).length
+    : covered;
   const contacts = placed ? neighbourContacts(placed, cells) : 0;
 
   return {
@@ -266,9 +260,11 @@ export function canPlaceBrick(context, placement, options = {}) {
     cells,
     support,
     footing,
-    newlyCovered,
+    covered,          // cells of this brick that are target geometry
+    outside,          // cells of this brick that are NOT (false positives)
+    fit: covered / cells.length, // 1 = sits entirely inside the shape
+    newlyCovered,     // target cells this brick is the first to cover
     contacts,
-    score: scorePlacement({ newlyCovered, support, contacts }),
   };
 }
 

@@ -8,11 +8,9 @@ import {
   getPart,
   isValidRotation,
   markPlaced,
-  neighbourContacts,
   PART_3001,
   placementFootprint,
   REJECTED,
-  scorePlacement,
   supportRatio,
   toModelBrick,
   VALID_ROTATIONS,
@@ -33,11 +31,12 @@ const at = (x, y, z, rotation = 0) => ({ partId: "3001", position: { x, y, z }, 
 
 describe("part 3001", () => {
   it("matches the existing LEGO model convention for a 2x4 brick", () => {
-    assert.deepEqual({ ...PART_3001 }, {
-      partId: "3001", type: "brick", width: 2, depth: 4, height: 3,
-    });
+    assert.equal(PART_3001.partId, "3001");
+    assert.equal(PART_3001.width, 2);
+    assert.equal(PART_3001.depth, 4);
+    assert.equal(PART_3001.height, 3);
     assert.equal(getPart("3001"), PART_3001);
-    assert.equal(getPart("3003"), null);
+    assert.equal(getPart("9999"), null);
     assert.equal(getPart(undefined), null);
   });
 
@@ -112,7 +111,7 @@ describe("canPlaceBrick: validity", () => {
   });
 
   it("rejects an unsupported part id", () => {
-    const result = canPlaceBrick({ target: target(4, 3, 4) }, { partId: "3003", position: { x: 0, y: 0, z: 0 } });
+    const result = canPlaceBrick({ target: target(4, 3, 4) }, { partId: "9999", position: { x: 0, y: 0, z: 0 } });
     assert.equal(result.ok, false);
     assert.equal(result.reason, REJECTED.PART);
   });
@@ -269,38 +268,6 @@ describe("canPlaceBrick: support", () => {
     assert.equal(footingRatio(t, placed, PART_3001, { x: 0, y: 3, z: 0 }, 90), 1);
     // Ground layer is unconditionally 1.
     assert.equal(supportRatio(placed, PART_3001, { x: 0, y: 0, z: 0 }, 0), 1);
-  });
-});
-
-describe("scoring", () => {
-  it("puts coverage above support, and support above neighbour contacts", () => {
-    const more = scorePlacement({ newlyCovered: 24, support: 0, contacts: 0 });
-    const fewer = scorePlacement({ newlyCovered: 23, support: 1, contacts: 99 });
-    assert.ok(more > fewer, "coverage dominates");
-
-    const supported = scorePlacement({ newlyCovered: 24, support: 1, contacts: 0 });
-    const touching = scorePlacement({ newlyCovered: 24, support: 0, contacts: 99 });
-    assert.ok(supported > touching, "support beats contacts");
-
-    const withContacts = scorePlacement({ newlyCovered: 24, support: 1, contacts: 4 });
-    assert.ok(withContacts > supported, "contacts break the remaining tie");
-  });
-
-  it("is a pure function of its inputs", () => {
-    const args = { newlyCovered: 24, support: 0.5, contacts: 3 };
-    assert.equal(scorePlacement(args), scorePlacement({ ...args }));
-  });
-
-  it("counts side-adjacent placed cells as contacts", () => {
-    const t = target(4, 3, 4);
-    const placed = t.createEmptyLike();
-    markPlaced(placed, brickCells(PART_3001, { x: 0, y: 0, z: 0 }, 0));
-
-    const neighbour = brickCells(PART_3001, { x: 2, y: 0, z: 0 }, 0);
-    assert.equal(neighbourContacts(placed, neighbour), 12); // 4 deep x 3 plates share a face
-
-    const isolated = brickCells(PART_3001, { x: 2, y: 0, z: 0 }, 0);
-    assert.equal(neighbourContacts(t.createEmptyLike(), isolated), 0);
   });
 });
 

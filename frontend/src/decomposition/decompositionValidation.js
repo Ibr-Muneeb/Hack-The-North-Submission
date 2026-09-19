@@ -26,13 +26,16 @@ export function validateVoxelGridInput(grid) {
 
 /** Throws RangeError/TypeError for out-of-range options. */
 export function validateDecompositionOptions(options = {}) {
-  const { fillThreshold, minSupportRatio, maxBricks, maxUncoveredReported, color } = options;
+  const { fillThreshold, minSupportRatio, maxOutsideRatio, maxBricks, maxUncoveredReported, color } = options;
 
   if (fillThreshold !== undefined && (!Number.isFinite(fillThreshold) || fillThreshold <= 0 || fillThreshold > 1)) {
     throw new RangeError(`fillThreshold must be in (0, 1], got ${fillThreshold}`);
   }
   if (minSupportRatio !== undefined && (!Number.isFinite(minSupportRatio) || minSupportRatio < 0 || minSupportRatio > 1)) {
     throw new RangeError(`minSupportRatio must be in [0, 1], got ${minSupportRatio}`);
+  }
+  if (maxOutsideRatio !== undefined && (!Number.isFinite(maxOutsideRatio) || maxOutsideRatio < 0 || maxOutsideRatio >= 1)) {
+    throw new RangeError(`maxOutsideRatio must be in [0, 1), got ${maxOutsideRatio}`);
   }
   if (maxBricks !== undefined && (!Number.isInteger(maxBricks) || maxBricks <= 0)) {
     throw new RangeError(`maxBricks must be a positive integer, got ${maxBricks}`);

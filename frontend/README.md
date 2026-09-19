@@ -149,11 +149,119 @@ source model, additional parts, plates/tiles for leftover height, optimisation
 beyond greedy, real connection/stability simulation, parts lists and building
 instructions.
 
+## Smarter decomposition (Milestone 6)
+
+Milestone 5 could only place 2x4 bricks, so anything curved or stepped came out
+coarse. M6 keeps the same deterministic bottom-up greedy pipeline and makes it
+choose better, by giving it more bricks to choose from and a proper scoring
+function.
+
+The pipeline is unchanged, and still stops short of image reconstruction:
+
+```text
+Voxel representation -> LEGO decomposition -> LEGO model
+```
+
+Image -> 3D reconstruction is a later milestone. M6 is strictly about the
+middle arrow.
+
+**Supported bricks.** Four standard 3-plate-high bricks, all defined once in
+`src/decomposition/brickCatalog.js`, which is the only place dimensions live:
+
+| Part | Size | width x depth | Rotations generated |
+| --- | --- | --- | --- |
+| 3001 | 2x4 | 2 x 4 | 0, 90 |
+| 3003 | 2x2 | 2 x 2 | 0 |
+| 3004 | 1x2 | 1 x 2 | 0, 90 |
+| 3005 | 1x1 | 1 x 1 | 0 |
+
+A rotation is only generated when it yields a different footprint, so square
+bricks get one candidate and 180/270 are never duplicated (they repeat 0/90 for
+a rectangle, because `position` is the min corner of the rotated footprint).
+All four rotations remain legal input.
+
+`public/ldraw/` only shipped 3001, so minimal `3003.dat`, `3004.dat` and
+`3005.dat` were added, built from the LDraw primitives already present
+(`stud`, `stud4`, `box5`, `box3u2p`) and following 3001's construction and
+winding. They load through the existing `LegoPart.js` / LDrawLoader path;
+nothing about rendering changed.
+
+**Candidate scoring** (`src/decomposition/candidateScoring.js`). At each anchor
+cell the decomposer measures every catalog shape and rotation, then scores it:
+
+- `+10` per target cell the brick is first to cover - the main term;
+- `-14` per cell it occupies that is **not** target geometry. The penalty is
+  bigger than the reward, so buying one extra covered cell with one stray cell
+  is a net loss. This is what keeps a 2x4 from bulldozing across a curved edge;
+- `+6 x fit`, where fit is covered/total cells - a ratio, so it prefers the
+  brick that follows the boundary most cleanly rather than the biggest one;
+- `+3 x support`, the fraction of the footprint resting on bricks already placed;
+- `+0.4` per shared cell face with a neighbouring brick (capped), so the model
+  grows as connected structure instead of scattered islands;
+- `+0.25 x area`, a deliberately small nudge toward fewer, larger bricks. It
+  breaks ties; it can never outweigh coverage or the stray-cell penalty.
+
+**Determinism.** No randomness, no time, no unordered iteration. Scores are
+floats, so ties are broken by an explicit chain: score, covered cells, fewer
+stray cells, support, connectivity, brick area, catalog order, rotation, then
+grid position (y, z, x). The same voxel grid always yields byte-identical
+model data.
+
+**Support and footing** are unchanged from M5 and remain distinct: *footing*
+(placed brick **or** target geometry beneath) decides whether a placement is
+legal, *support* (placed bricks only) is a scoring preference. Small bricks
+make narrow bases buildable, so a sphere's bottom cap is no longer a problem.
+
+**Irregular shapes.** Large bricks win in the interior because they cover more
+cells; near the surface the false-positive penalty makes the smaller brick that
+fits tightly win instead. By default a brick may not leave the target shape at
+all (`maxOutsideRatio: 0`), so the LEGO silhouette never bulges past the voxel
+geometry. The Decompose tab's *Boundary* dropdown switches to
+`maxOutsideRatio: 0.25`, which lets bricks round outward over a curved surface -
+higher coverage, and every stray cell counted as a false positive in the stats.
+
+**Staircase fix.** The M5 staircase looked shifted toward +X. The cause was not
+an offset anywhere: when a surface lands exactly on the midpoint of a LEGO
+cell - which happens whenever a shape's features are not whole studs or plates,
+such as the demo staircase's 1.5-stud treads - that cell is exactly half full,
+and M5's "at least half" rule rounded the tie **up**, growing the shape by one
+cell at every such boundary. The comparison is now strict, so a tie rounds
+down and the model stays inside the voxel geometry. Checked cell by cell
+against the staircase surface, the conversion went from 3 disagreeing cells to
+0. A LEGO-aligned staircase demo shape (2-stud treads, one brick course of rise)
+was added alongside the original, and both are covered by regression tests.
+
+**Measured results** (voxel size 0.2, strict fit):
+
+| Shape | M5 coverage | M6 coverage | M6 bricks |
+| --- | --- | --- | --- |
+| Sphere | 57.3% | 84.4% | 95 |
+| Cylinder | 86.3% | 93.6% | 112 |
+| Staircase | 80.1% | 88.3% | 15 |
+| Cube | 90.0% | 90.0% | 48 |
+| LEGO-aligned staircase | - | 100% | 10 |
+
+The cube is unchanged because its coverage was never limited by brick choice -
+its 20-plate height leaves two plates that no 3-plate brick can fill.
+
+**Known limitations.**
+
+- Bricks only, in whole 3-plate courses: leftover height shorter than a brick
+  stays uncovered. Plates and tiles would fix this.
+- Greedy and local. Each anchor is decided once, in scan order, with no
+  backtracking, so the tiling is good rather than optimal.
+- Support is a footprint test, not physics: no stud/tube connection check, no
+  centre of mass, no toppling.
+- Colour is still a single default; colour comes with image reconstruction.
+- Very thin features (under half a LEGO cell) still disappear in the voxel to
+  LEGO resampling.
+
 ## Tests
 
 ```bash
 npm test        # node's built-in test runner, no extra dependencies
 ```
 
-Tests cover the voxel layer, the decomposition layer (mapping, placement,
-rotation, overlap, support, coverage, determinism) and the layer boundaries.
+Tests cover the voxel layer, the decomposition layer (brick catalog, mapping,
+placement, rotation, scoring, overlap, support, coverage, determinism,
+staircase positioning) and the layer boundaries.

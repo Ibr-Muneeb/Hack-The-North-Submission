@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
+import { BRICK_CATALOG } from "../decomposition/brickCatalog.js";
 import { decomposeVoxelGrid } from "../decomposition/decomposer.js";
 import { DECOMPOSITION_SHAPES, getDecompositionShape } from "../decomposition/demoShapes.js";
 import LEGOViewer from "./LEGOViewer.jsx";
@@ -13,15 +14,25 @@ const MAX_VOXEL_SIZE = 2;
 // Every brick is its own LDraw Object3D, so keep the demo's draw calls sane.
 const MAX_BRICKS = 600;
 
-function run(shapeId, voxelSize) {
+// How much of a brick may hang outside the target shape (see decomposer.js).
+const FIT_MODES = {
+  strict: { label: "Strict fit (stay inside)", maxOutsideRatio: 0 },
+  overhang: { label: "Allow overhang (rounder)", maxOutsideRatio: 0.25 },
+};
+
+function run(shapeId, voxelSize, fitMode) {
   const grid = getDecompositionShape(shapeId).generate({ voxelSize });
-  return { shapeId, grid, result: decomposeVoxelGrid(grid, { maxBricks: MAX_BRICKS }) };
+  const result = decomposeVoxelGrid(grid, {
+    maxBricks: MAX_BRICKS,
+    maxOutsideRatio: FIT_MODES[fitMode].maxOutsideRatio,
+  });
+  return { shapeId, grid, result };
 }
 
 const percent = (ratio) => `${(ratio * 100).toFixed(1)}%`;
 
 /**
- * Milestone 5 demo:
+ * Milestone 5/6 demo:
  *   shape -> VoxelGrid (src/voxel) -> decomposition (src/decomposition)
  *         -> LEGO model data -> existing LDraw renderer (src/lego).
  *
@@ -32,8 +43,9 @@ export default function DecomposeDemo() {
   const [shapeId, setShapeId] = useState(DEFAULT_SHAPE_ID);
   const [voxelSizeText, setVoxelSizeText] = useState(String(DEFAULT_VOXEL_SIZE));
   const [view, setView] = useState("lego");
+  const [fitMode, setFitMode] = useState("strict");
   const [error, setError] = useState(null);
-  const [state, setState] = useState(() => run(DEFAULT_SHAPE_ID, DEFAULT_VOXEL_SIZE));
+  const [state, setState] = useState(() => run(DEFAULT_SHAPE_ID, DEFAULT_VOXEL_SIZE, "strict"));
 
   function handleSubmit(event) {
     event.preventDefault();
@@ -43,7 +55,7 @@ export default function DecomposeDemo() {
       return;
     }
     try {
-      setState(run(shapeId, voxelSize));
+      setState(run(shapeId, voxelSize, fitMode));
       setError(null);
     } catch (problem) {
       setError(problem.message);
@@ -58,7 +70,7 @@ export default function DecomposeDemo() {
       <div className="viewer">
         {view === "lego" ? (
           // key: a new decomposition gets a fresh camera framing.
-          <LEGOViewer key={`lego-${state.shapeId}-${grid.voxelSize}`} model={result.model} />
+          <LEGOViewer key={`lego-${state.shapeId}-${grid.voxelSize}-${fitMode}`} model={result.model} />
         ) : (
           <VoxelViewer key={`voxel-${state.shapeId}-${grid.voxelSize}`} grid={grid} />
         )}
@@ -89,6 +101,16 @@ export default function DecomposeDemo() {
             />
           </label>
           <label className="field">
+            <span>Boundary</span>
+            <select value={fitMode} onChange={(e) => setFitMode(e.target.value)}>
+              {Object.entries(FIT_MODES).map(([id, mode]) => (
+                <option key={id} value={id}>
+                  {mode.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
             <span>Show</span>
             <select value={view} onChange={(e) => setView(e.target.value)}>
               <option value="lego">LEGO bricks (decomposed)</option>
@@ -114,15 +136,32 @@ export default function DecomposeDemo() {
           <dd>{result.targetVolume.toLocaleString()}</dd>
           <dt>LEGO grid</dt>
           <dd>{result.legoGrid.sizeX} × {result.legoGrid.sizeY} × {result.legoGrid.sizeZ}</dd>
-          <dt>Generated bricks</dt>
-          <dd>{result.bricks.length.toLocaleString()} × 3001</dd>
+          <dt>Bricks</dt>
+          <dd>{result.bricks.length.toLocaleString()}</dd>
+          <dt>Target cells</dt>
+          <dd>{result.stats.targetCells.toLocaleString()}</dd>
+          <dt>Covered cells</dt>
+          <dd>{result.stats.coveredCells.toLocaleString()}</dd>
           <dt>Covered volume</dt>
           <dd>{result.coveredVolume.toLocaleString()} voxels</dd>
-          <dt>Uncovered</dt>
-          <dd>{result.uncoveredVoxelCount.toLocaleString()} voxels</dd>
           <dt>Coverage</dt>
           <dd>{percent(result.coverageRatio)}</dd>
+          <dt>False positives</dt>
+          <dd>{result.stats.falsePositiveCells.toLocaleString()} cells</dd>
+          <dt>Supported</dt>
+          <dd>{result.stats.supportedBricks} / {result.bricks.length}</dd>
         </dl>
+
+        {result.bricks.length > 0 && (
+          <dl className="stats">
+            {BRICK_CATALOG.map((brick) => (
+              <Fragment key={brick.partId}>
+                <dt>{brick.partId} ({brick.label})</dt>
+                <dd>{result.stats.brickCounts[brick.partId].toLocaleString()}</dd>
+              </Fragment>
+            ))}
+          </dl>
+        )}
 
         {result.warnings.length > 0 && (
           <p className="legend" role="status">
@@ -131,9 +170,10 @@ export default function DecomposeDemo() {
         )}
 
         <p className="legend">
-          Only part <strong>3001</strong> (2×4 brick) is placed, in whole 3-plate courses, and only
-          where it fits entirely inside the target shape — so coverage below 100% is expected for
-          anything that is not a multiple of a brick.
+          Bricks <strong>3001</strong> (2×4), <strong>3003</strong> (2×2), <strong>3004</strong> (1×2)
+          and <strong>3005</strong> (1×1) are placed in whole 3-plate courses. Larger bricks win in
+          the interior; near the surface the smaller brick that fits more tightly wins. Leftover
+          height shorter than a brick stays uncovered.
         </p>
       </aside>
 

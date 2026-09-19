@@ -14,6 +14,21 @@ export {
   DEFAULT_FILL_THRESHOLD,
 } from "./voxelToLegoGrid.js";
 export {
+  BRICK_CATALOG,
+  candidateShapes,
+  catalogIndex,
+  getBrickDefinition,
+  isSupportedPart,
+  LARGEST_BRICK,
+} from "./brickCatalog.js";
+export {
+  compareCandidates,
+  isBetterCandidate,
+  scoreCandidate,
+  MAX_SCORED_CONTACTS,
+  WEIGHTS,
+} from "./candidateScoring.js";
+export {
   brickCells,
   canPlaceBrick,
   getPart,
@@ -22,7 +37,8 @@ export {
   footingRatio,
   neighbourContacts,
   placementFootprint,
-  scorePlacement,
+  SUPPORTED_PART_IDS,
+  DEFAULT_MAX_OUTSIDE_RATIO,
   supportRatio,
   toModelBrick,
   DISTINCT_ROTATIONS,
@@ -31,7 +47,13 @@ export {
   REJECTED,
   VALID_ROTATIONS,
 } from "./brickPlacement.js";
-export { decomposeOccupancy, decomposeVoxelGrid, DEFAULT_BRICK_COLOR } from "./decomposer.js";
+export {
+  brickDefinitionOf,
+  decomposeOccupancy,
+  decomposeVoxelGrid,
+  DEFAULT_BRICK_COLOR,
+  DEFAULT_DECOMPOSE_MAX_OUTSIDE_RATIO,
+} from "./decomposer.js";
 export {
   findOverlaps,
   validateDecompositionOptions,

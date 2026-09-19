@@ -4,59 +4,61 @@
  *
  *   VoxelGrid -> LegoOccupancy (target) -> greedy brick placement -> LEGO model
  *
- * Deterministic bottom-up greedy. No randomness, no optimizer, no ML: running
- * the same input twice produces byte-identical output.
+ * Deterministic bottom-up greedy. No randomness, no time, no global search:
+ * running the same input twice produces byte-identical output.
  *
- * ---- Algorithm ----------------------------------------------------------
+ * ---- Algorithm (Milestone 6) --------------------------------------------
  *
- * The only part is 3001 (2x4x3 plates), so the model is built in COURSES of
- * 3 plates starting at y = 0: y = 0, 3, 6, ... Any leftover height at the top
- * that is shorter than a brick cannot be represented by 3001 alone and is
- * reported as uncovered rather than faked with a misplaced brick.
+ * Bricks are 3 plates tall, so the model is built in COURSES starting at
+ * y = 0: y = 0, 3, 6, ... Leftover height at the top that is shorter than a
+ * brick cannot be represented by the catalog (no plates or tiles yet) and is
+ * reported as uncovered rather than faked.
  *
  *   for each course y (bottom to top):
- *     repeat:
- *       scan every anchor (z ascending, then x ascending)
- *         for each distinct rotation (0, then 90)
- *           evaluate canPlaceBrick(...)
- *       keep the highest-scoring valid candidate
- *         (ties broken by scan order: first one found wins)
- *       place it and mark its cells
- *     until no valid candidate remains
+ *     for each anchor cell (z ascending, then x ascending):
+ *       skip it if it is already filled, or is not target geometry
+ *       for each catalog shape (largest first) and each distinct rotation:
+ *         measure the placement (brickPlacement.js)
+ *         score it (candidateScoring.js)
+ *       place the best candidate anchored at this cell
  *
- * The scan order (y, then z, then x, then rotation) is the same order the
- * occupancy grids iterate in, and ties are always broken toward the first
- * candidate found, which is what makes the output reproducible.
+ * The anchor is the brick's MIN CORNER, so scanning z then x gives each cell
+ * its turn to start a brick, and cells already covered are skipped. This is
+ * one pass per course, rather than Milestone 5's "rescan the whole course
+ * after every placement": with four brick sizes the rescan version evaluates
+ * millions of candidates on a sphere, and it changes almost nothing, because
+ * the winner at an anchor rarely depends on bricks placed later in the same
+ * course.
  *
- * Scoring lives in brickPlacement.js: coverage first, then support underneath,
- * then contact with neighbouring bricks.
+ * Milestone 5 could only place 2x4s, so it left a hole wherever one did not
+ * fit. With 2x2, 1x2 and 1x1 in the catalog the scan can follow a curved or
+ * stepped boundary: big bricks win in the interior because they cover more
+ * cells, and near the surface the false-positive penalty lets the smaller
+ * brick that fits tightly win instead.
  *
  * ---- Guarantees ---------------------------------------------------------
  *
  *   - the input VoxelGrid is never modified (read-only throughout)
- *   - a brick is only placed where ALL of its cells are inside the target
- *     shape, so the model never bulges outside the voxel geometry
  *   - bricks never overlap (checked against the `placed` occupancy grid)
- *   - bricks above the ground course always have support beneath them
- *
- * The flip side of "never bulge outside the target": features thinner than a
- * brick are simply left out, so coverage is < 100% for anything that is not
- * a multiple of 2x4x3 - which is exactly what the coverage statistics report.
+ *   - bricks above the ground course always have footing beneath them
+ *   - how far a brick may stick out of the target is bounded by
+ *     `maxOutsideRatio` and counted in the statistics; it is never hidden
  */
 
 import { BRICK_PLATES } from "../lego/coordinates.js";
+import { BRICK_CATALOG, candidateShapes, getBrickDefinition } from "./brickCatalog.js";
 import {
   canPlaceBrick,
-  DISTINCT_ROTATIONS,
+  DEFAULT_MAX_OUTSIDE_RATIO,
   markPlaced,
   MIN_SUPPORT_RATIO,
-  PART_3001,
   toModelBrick,
 } from "./brickPlacement.js";
+import { isBetterCandidate, scoreCandidate } from "./candidateScoring.js";
 import { validateDecompositionOptions, validateVoxelGridInput } from "./decompositionValidation.js";
 import { voxelGridToLegoOccupancy, worldToLegoCell } from "./voxelToLegoGrid.js";
 
-/** Colour is not part of the decomposition problem this milestone (see README). */
+/** Colour is not part of the decomposition problem yet (see README). */
 export const DEFAULT_BRICK_COLOR = "red";
 
 /** Safety valve so a pathological input can't spin forever. */
@@ -66,10 +68,25 @@ export const DEFAULT_MAX_BRICKS = 20000;
 export const DEFAULT_MAX_UNCOVERED_REPORTED = 10000;
 
 /**
+ * How much of a brick may fall outside the target shape by default.
+ *
+ * 0 keeps Milestone 5's strict containment: the LEGO model never bulges past
+ * the voxel shape. It is the default because an honest silhouette matters
+ * more for the demo than the last few percent of coverage, and with 1x1
+ * bricks available strict containment already gets most of the way. Raise it
+ * (e.g. 0.25) to let bricks round outward over a curved surface; every stray
+ * cell is penalised by the scoring function and counted in the statistics.
+ */
+export const DEFAULT_DECOMPOSE_MAX_OUTSIDE_RATIO = DEFAULT_MAX_OUTSIDE_RATIO;
+
+/** Candidate shapes, computed once: [{ brick, rotation }, ...] largest first. */
+const SHAPES = candidateShapes();
+
+/**
  * Place bricks into a target LegoOccupancy. Exposed separately from
  * `decomposeVoxelGrid` so placement can be tested without a VoxelGrid.
  *
- * @returns {{bricks: Array, placed: import("./LegoOccupancy.js").LegoOccupancy, truncated: boolean}}
+ * @returns {{bricks: Array, placed: object, truncated: boolean, stats: object}}
  */
 export function decomposeOccupancy(target, options = {}) {
   const {
@@ -77,54 +94,84 @@ export function decomposeOccupancy(target, options = {}) {
     maxBricks = DEFAULT_MAX_BRICKS,
     minSupportRatio = MIN_SUPPORT_RATIO,
     requireSupport = true,
-    rotations = DISTINCT_ROTATIONS,
+    maxOutsideRatio = DEFAULT_DECOMPOSE_MAX_OUTSIDE_RATIO,
+    shapes = SHAPES,
   } = options;
 
-  const part = PART_3001;
+  const placementOptions = { requireSupport, minSupportRatio, maxOutsideRatio };
   const placed = target.createEmptyLike();
   const bricks = [];
+  const brickCounts = Object.fromEntries(BRICK_CATALOG.map((brick) => [brick.partId, 0]));
+  let falsePositiveCells = 0;
+  let supportedBricks = 0;
   let truncated = false;
 
-  for (let y = 0; y + part.height <= target.sizeY; y += BRICK_PLATES) {
-    // Skip empty courses cheaply.
+  for (let y = 0; y + BRICK_PLATES <= target.sizeY && !truncated; y += BRICK_PLATES) {
     if (target.countInLayer(y) === 0) continue;
 
-    for (;;) {
-      let best = null;
+    for (let z = 0; z < target.sizeZ && !truncated; z++) {
+      for (let x = 0; x < target.sizeX; x++) {
+        // An anchor must be an unused cell of the target shape.
+        if (placed.get(x, y, z) || !target.get(x, y, z)) continue;
 
-      for (let z = 0; z < target.sizeZ; z++) {
-        for (let x = 0; x < target.sizeX; x++) {
-          // Fast reject: the anchor cell itself must be usable target space.
-          if (!target.get(x, y, z) || placed.get(x, y, z)) continue;
+        const best = bestCandidateAt(target, placed, { x, y, z }, shapes, placementOptions);
+        if (!best) continue;
 
-          for (const rotation of rotations) {
-            const placement = { partId: part.partId, position: { x, y, z }, rotation };
-            const result = canPlaceBrick({ target, placed }, placement, {
-              requireSupport,
-              minSupportRatio,
-            });
-            // Strictly greater: ties keep the earlier (scan-order) candidate.
-            if (result.ok && (best === null || result.score > best.result.score)) {
-              best = { placement, result };
-            }
-          }
+        markPlaced(placed, best.cells);
+        bricks.push(toModelBrick(best.brick, best.position, best.rotation, color));
+        brickCounts[best.partId]++;
+        falsePositiveCells += best.outside;
+        if (best.position.y === 0 || best.support > 0) supportedBricks++;
+
+        if (bricks.length >= maxBricks) {
+          truncated = true;
+          break;
         }
       }
-
-      if (!best) break;
-
-      markPlaced(placed, best.result.cells);
-      bricks.push(toModelBrick(part, best.placement.position, best.placement.rotation, color));
-
-      if (bricks.length >= maxBricks) {
-        truncated = true;
-        break;
-      }
     }
-    if (truncated) break;
   }
 
-  return { bricks, placed, truncated };
+  return {
+    bricks,
+    placed,
+    truncated,
+    stats: { brickCounts, falsePositiveCells, supportedBricks },
+  };
+}
+
+/** The best legal placement whose min corner is `position`, or null. */
+function bestCandidateAt(target, placed, position, shapes, placementOptions) {
+  let best = null;
+
+  for (const { brick, rotation } of shapes) {
+    const result = canPlaceBrick(
+      { target, placed },
+      { partId: brick.partId, position, rotation },
+      placementOptions,
+    );
+    if (!result.ok) continue;
+
+    const candidate = {
+      brick,
+      partId: brick.partId,
+      rotation,
+      position,
+      area: brick.area,
+      cells: result.cells,
+      newlyCovered: result.newlyCovered,
+      covered: result.covered,
+      outside: result.outside,
+      fit: result.fit,
+      support: result.support,
+      contacts: result.contacts,
+      score: 0,
+    };
+    candidate.score = scoreCandidate(candidate);
+
+    if (isBetterCandidate(candidate, best)) best = candidate;
+  }
+
+  return best;
 }
 
 /**
@@ -142,6 +189,7 @@ export function decomposeOccupancy(target, options = {}) {
  * @param {string}  [options.color="red"]
  * @param {number}  [options.fillThreshold=0.5]   voxel->LEGO cell threshold
  * @param {number}  [options.minSupportRatio=0.25]
+ * @param {number}  [options.maxOutsideRatio=0]
  * @param {boolean} [options.requireSupport=true]
  * @param {number}  [options.maxBricks=20000]
  * @param {number}  [options.maxUncoveredReported=10000]
@@ -150,10 +198,7 @@ export function decomposeVoxelGrid(grid, options = {}) {
   validateVoxelGridInput(grid);
   validateDecompositionOptions(options);
 
-  const {
-    fillThreshold,
-    maxUncoveredReported = DEFAULT_MAX_UNCOVERED_REPORTED,
-  } = options;
+  const { fillThreshold, maxUncoveredReported = DEFAULT_MAX_UNCOVERED_REPORTED } = options;
 
   const warnings = [];
   const { occupancy: target, scale, warnings: conversionWarnings } = voxelGridToLegoOccupancy(
@@ -162,13 +207,13 @@ export function decomposeVoxelGrid(grid, options = {}) {
   );
   warnings.push(...conversionWarnings);
 
-  const { bricks, placed, truncated } = decomposeOccupancy(target, options);
+  const { bricks, placed, truncated, stats: placementStats } = decomposeOccupancy(target, options);
   if (truncated) {
     warnings.push(`Stopped after ${bricks.length} bricks (maxBricks reached); the model is incomplete.`);
   }
   if (target.sizeY < BRICK_PLATES) {
     warnings.push(
-      `The shape is only ${target.sizeY} plate(s) tall; a 3001 brick is ${BRICK_PLATES} plates, so nothing fits.`,
+      `The shape is only ${target.sizeY} plate(s) tall; a brick is ${BRICK_PLATES} plates, so nothing fits.`,
     );
   }
 
@@ -191,6 +236,12 @@ export function decomposeVoxelGrid(grid, options = {}) {
   const targetVolume = grid.count;
   const coverageRatio = targetVolume === 0 ? 1 : coveredVolume / targetVolume;
 
+  // Covered target CELLS: placed cells that are actually part of the shape.
+  let coveredCells = 0;
+  for (const { x, y, z } of placed.occupiedCells()) {
+    if (target.get(x, y, z)) coveredCells++;
+  }
+
   return {
     // --- the LEGO model, ready for the existing renderer ---
     model: { bricks },
@@ -211,11 +262,20 @@ export function decomposeVoxelGrid(grid, options = {}) {
     legoGrid: { sizeX: target.sizeX, sizeY: target.sizeY, sizeZ: target.sizeZ, origin: [...origin] },
     stats: {
       brickCount: bricks.length,
+      brickCounts: placementStats.brickCounts,
+      supportedBricks: placementStats.supportedBricks,
+      falsePositiveCells: placementStats.falsePositiveCells,
       targetCells: target.count,
+      coveredCells,
       filledCells: placed.count,
-      cellCoverageRatio: target.count === 0 ? 1 : placed.count / target.count,
+      cellCoverageRatio: target.count === 0 ? 1 : coveredCells / target.count,
       courses: Math.floor(target.sizeY / BRICK_PLATES),
     },
     warnings,
   };
+}
+
+/** Catalog entry for a brick in a generated model (handy in the UI and tests). */
+export function brickDefinitionOf(brick) {
+  return getBrickDefinition(brick?.partId);
 }

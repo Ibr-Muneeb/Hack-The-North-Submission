@@ -14,6 +14,7 @@
 
 import { VoxelGrid } from "../voxel/VoxelGrid.js";
 import { DEMO_SHAPES } from "../voxel/shapes.js";
+import { voxelizeStaircase } from "../voxel/voxelizeStaircase.js";
 import { describeVoxelScale } from "./voxelToLegoGrid.js";
 
 /**
@@ -66,6 +67,18 @@ const EXACT_SHAPES = [
     label: "Large slab",
     description: "8×4 studs, 2 courses → 8 × 3001",
     generate: ({ voxelSize }) => voxelizeLegoBox({ studsX: 8, studsZ: 4, plates: 6, voxelSize }),
+  },
+  {
+    // A staircase whose steps are whole LEGO units: 2 studs of tread per step,
+    // and a rise of 1.2 world units = 3 plates = exactly one brick course. Every
+    // step edge therefore lands on a LEGO cell boundary, so the decomposition can
+    // reproduce it exactly. The Milestone 4 "Staircase" below uses 1.5-stud
+    // treads, which no whole number of studs can represent - a useful contrast.
+    id: "exact-staircase",
+    label: "LEGO-aligned staircase",
+    description: "4 steps, 2 studs x 1 course each",
+    generate: ({ voxelSize }) =>
+      voxelizeStaircase({ steps: 4, stepRun: 2, stepRise: 1.2, width: 4, voxelSize }),
   },
   {
     id: "exact-tower",

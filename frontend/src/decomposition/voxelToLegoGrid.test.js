@@ -117,7 +117,7 @@ describe("voxelGridToLegoOccupancy: aligned voxel sizes", () => {
     assert.equal(fine.count, coarse.count);
   });
 
-  it("leaves a LEGO cell empty when less than half of its volume is occupied", () => {
+  it("leaves a LEGO cell empty when at most half of its volume is occupied", () => {
     // One stud x one plate needs 5 x 2 x 5 = 50 voxels at 0.2; fill only 20.
     const grid = new VoxelGrid(5, 2, 5, { voxelSize: 0.2 });
     for (let z = 0; z < 2; z++) {
@@ -128,17 +128,31 @@ describe("voxelGridToLegoOccupancy: aligned voxel sizes", () => {
     assert.equal(grid.count, 20);
     assert.equal(voxelGridToLegoOccupancy(grid).occupancy.count, 0);
 
-    // The same 20 voxels are enough at a lower threshold.
-    assert.equal(voxelGridToLegoOccupancy(grid, { fillThreshold: 0.4 }).occupancy.count, 1);
+    // The same 20 voxels (40% of the cell) are enough at a lower threshold.
+    assert.equal(voxelGridToLegoOccupancy(grid, { fillThreshold: 0.3 }).occupancy.count, 1);
+    // ...but not at exactly 40%: the comparison is strict.
+    assert.equal(voxelGridToLegoOccupancy(grid, { fillThreshold: 0.4 }).occupancy.count, 0);
   });
 
-  it("fills a LEGO cell when at least half its volume is occupied", () => {
+  it("rounds an exactly-half-full cell DOWN, so the shape never inflates", () => {
+    // A surface landing exactly on a cell midpoint is a tie. Milestone 5 broke
+    // it toward "occupied", which grew every such boundary by one cell and made
+    // staircase treads look shifted along +X. M6 breaks it toward "empty".
     const grid = new VoxelGrid(5, 2, 5, { voxelSize: 0.2 });
     for (let z = 0; z < 5; z++) {
       for (let x = 0; x < 5; x++) grid.set(x, 0, z, true); // exactly half the height
     }
     assert.equal(grid.count, 25);
+    assert.equal(voxelGridToLegoOccupancy(grid).occupancy.count, 0);
+
+    // One more voxel layer tips it past half.
+    grid.set(0, 1, 0, true);
     assert.equal(voxelGridToLegoOccupancy(grid).occupancy.count, 1);
+  });
+
+  it("fills a cell that is completely full, whatever the threshold", () => {
+    const grid = solid(5, 2, 5, { voxelSize: 0.2 });
+    assert.equal(voxelGridToLegoOccupancy(grid, { fillThreshold: 1 }).occupancy.count, 1);
   });
 
   it("carries the voxel grid's origin, including negative world coordinates", () => {

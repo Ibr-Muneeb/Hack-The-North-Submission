@@ -32,14 +32,24 @@
  *
  * ---- Occupancy rule (rounding behaviour) --------------------------------
  *
- * A LEGO cell is occupied when at least `fillThreshold` (default 0.5) of its
+ * A LEGO cell is occupied when MORE than `fillThreshold` (default 0.5) of its
  * VOLUME is covered by occupied voxels. The overlap is computed exactly, by
  * volume, per axis - not by counting whole voxels - so the rule is the same
  * whether or not the voxel size divides a stud or a plate evenly. Anything
- * outside the voxel grid counts as empty.
+ * outside the voxel grid counts as empty. A cell that is completely full is
+ * always occupied, whatever the threshold.
  *
  * With an aligned voxel size this degenerates to the obvious thing: "a LEGO
- * cell is occupied if at least half of the voxels inside it are occupied".
+ * cell is occupied if more than half of the voxels inside it are occupied".
+ *
+ * The comparison is STRICT (Milestone 6 fix). A surface that lands exactly on
+ * the midpoint of a LEGO cell - which happens whenever a shape's features are
+ * not whole studs/plates, e.g. a staircase with 1.5-stud treads - leaves that
+ * cell exactly half full. Milestone 5 rounded those ties up, which always grew
+ * the shape outward and upward by one cell and made stair treads look shifted
+ * along +X and one plate too tall. Rounding a tie DOWN instead keeps the LEGO
+ * model inside the voxel geometry, matching the rule everywhere else in the
+ * decomposer that a brick never bulges past the target.
  *
  * ---- Voxel-size alignment ------------------------------------------------
  *
@@ -169,7 +179,8 @@ export function voxelGridToLegoOccupancy(grid, { fillThreshold = DEFAULT_FILL_TH
 
   const s = grid.voxelSize;
   const cellVolume = STUD_PITCH * PLATE_HEIGHT * STUD_PITCH;
-  const required = cellVolume * fillThreshold - EPSILON;
+  const required = cellVolume * fillThreshold;
+  const full = cellVolume - EPSILON;
 
   // Overlaps depend only on the index along each axis, so compute them once
   // per axis instead of once per cell.
@@ -209,7 +220,7 @@ export function voxelGridToLegoOccupancy(grid, { fillThreshold = DEFAULT_FILL_TH
             }
           }
         }
-        if (filled >= required) occupancy.set(cx, cy, cz, true);
+        if (filled > required + EPSILON || filled >= full) occupancy.set(cx, cy, cz, true);
       }
     }
   }
