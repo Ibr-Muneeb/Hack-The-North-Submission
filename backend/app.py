@@ -1,48 +1,46 @@
-"""Command-line entry point for Brickify mesh voxelization."""
+"""Brickify V2 API."""
 
-from __future__ import annotations
-
-import argparse
-import json
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
-from voxelizer import voxelize_mesh
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
-
-OUTPUT_PATH = Path(__file__).resolve().parent / "output_voxels.json"
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Voxelize a mesh for Brickify.")
-    parser.add_argument("mesh_path", help="Path to an .obj, .glb, or .gltf mesh")
-    parser.add_argument(
-        "--voxel-size",
-        type=float,
-        default=0.2,
-        help="Voxel edge length in mesh units (default: 0.2)",
-    )
-    return parser.parse_args()
+from voxel.voxelizer import SUPPORTED_EXTENSIONS, voxelize_mesh
 
 
-def main() -> int:
-    args = parse_args()
+app = FastAPI(title="Brickify API")
+
+
+@app.get("/api/health")
+def health() -> dict[str, str]:
+    """Confirm that the API is running."""
+    return {"status": "ok"}
+
+
+@app.post("/api/voxelize")
+async def voxelize_uploaded_mesh(
+    mesh: UploadFile = File(...),
+    voxel_size: float = Form(0.1, gt=0),
+) -> dict:
+    """Voxelize an uploaded OBJ, GLB, or glTF mesh."""
+    filename = Path(mesh.filename or "")
+    suffix = filename.suffix.lower()
+    if suffix not in SUPPORTED_EXTENSIONS:
+        formats = ", ".join(sorted(SUPPORTED_EXTENSIONS))
+        raise HTTPException(status_code=400, detail=f"Unsupported mesh format; use {formats}")
+
+    contents = await mesh.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="Uploaded mesh is empty")
+
+    temporary_path: Path | None = None
     try:
-        result = voxelize_mesh(args.mesh_path, args.voxel_size)
-        OUTPUT_PATH.write_text(json.dumps(result, indent=2), encoding="utf-8")
-    except (FileNotFoundError, TypeError, ValueError, OSError) as exc:
-        print(f"Error: {exc}")
-        return 1
-
-    source = result["source"]
-    print(f"Loaded: {source['fileName']}")
-    print(f"Mesh: {source['vertexCount']} vertices, {source['faceCount']} faces")
-    print(f"Voxel size: {result['voxelSize']}")
-    print(f"Dimensions (X, Y, Z): {result['dimensions']}")
-    print(f"Occupied voxels: {len(result['voxels'])}")
-    print(f"Coordinate convention: {result['coordinateConvention']}")
-    print(f"Wrote: {OUTPUT_PATH}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+        with NamedTemporaryFile(suffix=suffix, delete=False) as temporary_file:
+            temporary_file.write(contents)
+            temporary_path = Path(temporary_file.name)
+        return voxelize_mesh(temporary_path, voxel_size=voxel_size)
+    except (OSError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
