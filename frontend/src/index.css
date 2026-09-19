@@ -1,0 +1,78 @@
+:root {
+  --paper: #e8e4dc;
+  --paper-deep: #d3cdc1;
+  --ink: #26221d;
+  --ink-soft: #6d665b;
+  font-family: "Arial Rounded MT Bold", "Nunito", ui-rounded, system-ui, sans-serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.app {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+  background: radial-gradient(ellipse at 50% 40%, var(--paper) 0%, var(--paper-deep) 100%);
+}
+
+.viewer {
+  position: absolute;
+  inset: 0;
+}
+
+.viewer canvas {
+  cursor: grab;
+}
+
+.viewer canvas:active {
+  cursor: grabbing;
+}
+
+.masthead {
+  position: absolute;
+  top: 1.5rem;
+  left: 2rem;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.masthead h1 {
+  margin: 0;
+  font-size: clamp(1.75rem, 4vw, 2.75rem);
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  line-height: 1;
+}
+
+.masthead p {
+  margin: 0.4rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.95rem;
+}
+
+.hint {
+  position: absolute;
+  bottom: 1.25rem;
+  left: 2rem;
+  z-index: 1;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+  pointer-events: none;
+}
