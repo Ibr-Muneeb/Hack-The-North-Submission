@@ -76,3 +76,128 @@ body {
   font-size: 0.9rem;
   pointer-events: none;
 }
+
+/* ---- Mode switch (LEGO Model / Voxel Demo) ---- */
+
+.mode-switch {
+  position: absolute;
+  top: 1.5rem;
+  right: 2rem;
+  z-index: 2;
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.mode-switch button {
+  padding: 0.45rem 0.9rem;
+  border: 0;
+  border-radius: 0.55rem;
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.mode-switch button.active {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.mode-switch button:focus-visible,
+.panel :is(select, input, button):focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* ---- Voxel demo panel ---- */
+
+.panel {
+  position: absolute;
+  top: 6.5rem;
+  left: 2rem;
+  z-index: 1;
+  width: min(19rem, calc(100vw - 4rem));
+  padding: 1rem 1.1rem;
+  border-radius: 0.9rem;
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(6px);
+  font-size: 0.9rem;
+}
+
+.panel .field {
+  display: block;
+  margin-bottom: 0.8rem;
+}
+
+.panel .field span {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: var(--ink-soft);
+}
+
+.panel select,
+.panel input {
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--paper-deep);
+  border-radius: 0.5rem;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+}
+
+.panel .field-error {
+  margin: 0 0 0.8rem;
+  color: #a4281c;
+}
+
+.panel button.primary {
+  width: 100%;
+  padding: 0.55rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: var(--ink);
+  color: var(--paper);
+  font: inherit;
+  cursor: pointer;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 0.9rem;
+  margin: 1rem 0 0;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--paper-deep);
+}
+
+.stats dt {
+  color: var(--ink-soft);
+}
+
+.stats dd {
+  margin: 0;
+  text-align: right;
+}
+
+.legend {
+  margin: 0.9rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.legend span {
+  font-weight: 700;
+}
+
+.axis-label {
+  font-size: 1rem;
+  font-weight: 900;
+  text-shadow: 0 0 3px var(--paper);
+  user-select: none;
+}
