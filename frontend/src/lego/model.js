@@ -16,6 +16,10 @@
 export const testModel = {
   bricks: [
     {
+      // partId "3001" (LEGO 2x4 brick) makes Brick.jsx load the real LDraw
+      // geometry for this brick (see LegoPart.js). width/depth/height still
+      // describe its grid footprint and are also what the procedural
+      // fallback uses if the LDraw geometry can't be loaded.
       partId: "3001",
       type: "brick",
       width: 2,
