@@ -14,7 +14,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from lego.catalog import BRICK_CATALOG, footprint, orientations
+from lego.catalog import BRICK_CATALOG, footprint, orientations, rotation_for_orientation
 
 
 Voxel = tuple[int, int, int]
@@ -59,7 +59,7 @@ def _validate_voxel_grid(voxel_grid: Mapping[str, Any]) -> tuple[list[int], set[
 
 def _placement_cells(
     position: Voxel,
-    brick: dict[str, int | str],
+    brick: dict[str, Any],
     orientation: str,
 ) -> set[Voxel]:
     size_x, size_z = footprint(brick, orientation)
@@ -81,7 +81,7 @@ def decompose_voxel_grid(voxel_grid: Mapping[str, Any]) -> dict[str, Any]:
         # Layers are independent because Y is the first sort key. Within a
         # layer, lower Z then lower X anchors are always handled first.
         anchor = min(remaining, key=lambda voxel: (voxel[1], voxel[2], voxel[0]))
-        selected: tuple[dict[str, int | str], str, set[Voxel]] | None = None
+        selected: tuple[dict[str, Any], str, set[Voxel]] | None = None
 
         for brick in BRICK_CATALOG:
             for orientation in orientations(brick):
@@ -99,11 +99,17 @@ def decompose_voxel_grid(voxel_grid: Mapping[str, Any]) -> dict[str, Any]:
         brick, orientation, cells = selected
         bricks.append(
             {
+                "piece_id": brick["piece_id"],
                 "type": brick["type"],
+                "display_name": brick["display_name"],
+                "family": brick["family"],
                 "width": brick["width"],
+                "depth": brick["depth"],
                 "length": brick["length"],
+                "height_units": brick["height_units"],
                 "position": list(anchor),
                 "orientation": orientation,
+                "rotation_degrees": rotation_for_orientation(orientation),
             }
         )
         remaining.difference_update(cells)
@@ -113,12 +119,15 @@ def decompose_voxel_grid(voxel_grid: Mapping[str, Any]) -> dict[str, Any]:
         "bricks": bricks,
         "brick_count": len(bricks),
         "covered_voxels": len(original_voxels),
+        "grid_mode": "brick",
+        "vertical_unit": "one brick height (three plate units)",
         "coordinate_system": {
             "position": "minimum [x, y, z] corner",
             "x": "right",
             "y": "up; each brick occupies one layer",
             "z": "front",
-            "orientation": "XZ uses width on X and length on Z; ZX swaps them",
+            "orientation": "XZ/0° uses width on X and depth on Z; ZX/90° swaps them",
+            "rotation": "clockwise degrees around +Y; 0, 90, 180, or 270",
         },
     }
 

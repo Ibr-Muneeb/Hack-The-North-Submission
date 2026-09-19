@@ -7,7 +7,8 @@ from uuid import uuid4
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from starlette.concurrency import run_in_threadpool
 
-from lego.decomposer import decompose_voxel_grid
+from lego.demos import get_demo, list_demos
+from lego.model import build_lego_model
 from reconstruction.stable_fast_3d import (
     ReconstructionError,
     SUPPORTED_IMAGE_EXTENSIONS,
@@ -21,69 +22,38 @@ app = FastAPI(title="Brickify API")
 GENERATED_MODELS_DIR = Path(__file__).resolve().parent / "generated" / "models"
 
 
-def _demo_house_voxel_grid() -> dict:
-    """Create a deterministic multi-layer house for the frontend demo."""
-    dimensions = [10, 7, 8]
-    voxels = {
-        (x, y, z)
-        for y in range(4)
-        for z in range(dimensions[2])
-        for x in range(dimensions[0])
-    }
-
-    # Carve a front door and windows so the silhouette is more interesting.
-    for y in range(3):
-        for x in (4, 5):
-            voxels.discard((x, y, 7))
-    for y in (1, 2):
-        for x in (1, 2, 7, 8):
-            voxels.discard((x, y, 7))
-        for z in (2, 3):
-            voxels.discard((0, y, z))
-
-    # A stepped roof creates a clear house profile while keeping each brick in
-    # one logical Y layer, as required by the existing decomposer.
-    for x_min, x_max, y in ((0, 10, 4), (1, 9, 5), (3, 7, 6)):
-        voxels.update(
-            (x, y, z)
-            for z in range(dimensions[2])
-            for x in range(x_min, x_max)
-        )
-
-    return {
-        "dimensions": dimensions,
-        "voxel_size": 1.0,
-        "voxels": [list(voxel) for voxel in sorted(voxels)],
-    }
-
-
-def _decomposition_response(voxel_grid: dict, model_name: str) -> dict:
-    result = decompose_voxel_grid(voxel_grid)
-    return {
-        **result,
-        "model_name": model_name,
-        "voxel_size": float(voxel_grid.get("voxel_size", 1.0)),
-        "voxel_count": len(voxel_grid["voxels"]),
-    }
-
-
 @app.get("/api/health")
 def health() -> dict[str, str]:
     """Confirm that the API is running."""
     return {"status": "ok"}
 
 
+@app.get("/api/lego/demos")
+def lego_demos() -> dict:
+    """List deterministic models available to the frontend demo selector."""
+    return {"models": list_demos()}
+
+
 @app.get("/api/lego/demo")
-def lego_demo() -> dict:
-    """Return a backend-generated house decomposed by the real LEGO engine."""
-    return _decomposition_response(_demo_house_voxel_grid(), "Brickify House")
+def lego_demo(model: str = "house") -> dict:
+    """Return a backend-generated demo processed by the real LEGO engine."""
+    try:
+        demo = get_demo(model)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return build_lego_model(
+        demo["grid_factory"](),
+        model_id=demo["model_id"],
+        model_name=demo["model_name"],
+        layer_colors=demo["layer_colors"],
+    )
 
 
 @app.post("/api/lego/decompose")
 def decompose_voxels(voxel_grid: dict = Body(...)) -> dict:
     """Decompose a serialized Brickify voxel grid into LEGO placements."""
     try:
-        return _decomposition_response(voxel_grid, "Custom voxel model")
+        return build_lego_model(voxel_grid, model_name="Custom voxel model")
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

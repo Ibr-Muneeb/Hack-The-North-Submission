@@ -1,7 +1,7 @@
 import { ContactShadows, Grid, OrbitControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
-import LegoBrick from "./LegoBrick.jsx";
+import LegoPiece from "./LegoPiece.jsx";
 
 
 function CameraControls({ dimensions, autoRotate, resetSignal }) {
@@ -59,11 +59,14 @@ function LegoScene({ model, autoRotate, resetSignal }) {
       <directionalLight position={[-8, 6, -5]} intensity={0.7} color="#b9d2ff" />
 
       <group>
-        {model.bricks.map((brick) => (
-          <LegoBrick
-            key={`${brick.position.join("-")}-${brick.type}`}
-            brick={brick}
+        {model.bricks.map((placement) => (
+          <LegoPiece
+            key={`${placement.position.join("-")}-${placement.piece_id}`}
+            placement={placement}
+            piece={model.piece_catalog[placement.piece_id]}
+            color={model.color_catalog[placement.color_id]}
             dimensions={model.dimensions}
+            gridMode={model.grid_mode}
           />
         ))}
       </group>

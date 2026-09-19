@@ -27,8 +27,9 @@ The API is available at `http://127.0.0.1:8000`.
   field and an optional `voxel_size` form field.
 - `POST /api/lego/decompose` accepts the serialized voxel grid JSON returned by
   the voxelizer and returns LEGO brick placements.
-- `GET /api/lego/demo` returns a deterministic house generated as voxels and
-  passed through the same LEGO decomposer used for normal models.
+- `GET /api/lego/demos` lists the deterministic demo models.
+- `GET /api/lego/demo?model=house` returns either the `house` or `robot` demo,
+  generated as voxels and passed through the normal LEGO decomposer.
 
 Run the local voxelization demo from the backend directory:
 
@@ -47,10 +48,16 @@ python -m lego.decomposer
 ```
 
 The decomposer treats each voxel as one logical stud and processes every Y
-layer independently. It greedily tries 2x4, 2x3, 2x2, 1x4, 1x3, 1x2, then
-1x1 footprints, using fixed XZ/ZX orientation order. It models logical brick
-placements only; physical dimensions, colors, stability, and rendering are
-future milestones.
+layer independently. It greedily tries the reusable brick catalog from largest
+to smallest, including 1×1 through 1×8 and 2×2 through 2×8 footprints. Output
+placements include stable piece IDs, 0°/90° rotation, and deterministic color
+IDs. The API derives its parts aggregation from those actual placements.
+
+Catalog height is expressed in plate units: a standard brick is three units
+tall and a plate is one. The current voxel/decomposition pipeline remains in
+`brick` grid mode, where one Y cell is one complete brick height. Plate pieces
+are cataloged and supported by the procedural renderer, but intentionally have
+decomposition disabled until a distinct plate-resolution voxel grid is added.
 
 Generate a GLB through the hosted Stable Fast 3D Space:
 
@@ -84,7 +91,8 @@ npm run dev
 With the backend running at `http://127.0.0.1:8000`, open
 `http://127.0.0.1:5173`. Vite proxies `/api` to FastAPI during development.
 The demo supports drag-to-rotate, scroll/pinch zoom, right-drag pan, camera
-reset, and optional auto-rotation.
+Use the model selector to switch between Brickify House and Brickify Robot.
+The parts panel shows counts by catalog piece and assigned color.
 
 Create a production build with:
 

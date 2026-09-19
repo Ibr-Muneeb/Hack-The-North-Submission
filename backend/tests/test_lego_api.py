@@ -34,13 +34,21 @@ def test_lego_decompose_endpoint_accepts_voxel_grid() -> None:
     assert result["voxel_size"] == 0.2
     assert result["voxel_count"] == 8
     assert result["brick_count"] == 1
-    assert result["bricks"][0] == {
+    expected = {
+        "piece_id": "brick_2x4",
         "type": "2x4",
+        "family": "brick",
         "width": 2,
+        "depth": 4,
         "length": 4,
+        "height_units": 3,
         "position": [0, 0, 0],
         "orientation": "XZ",
+        "rotation_degrees": 0,
     }
+    assert expected.items() <= result["bricks"][0].items()
+    assert result["bricks"][0]["color_id"] in result["color_catalog"]
+    assert result["parts"][0]["count"] == 1
 
 
 def test_lego_decompose_endpoint_rejects_invalid_grid() -> None:
@@ -51,3 +59,25 @@ def test_lego_decompose_endpoint_rejects_invalid_grid() -> None:
 
     assert response.status_code == 400
     assert "outside dimensions" in response.json()["detail"]
+
+
+def test_second_demo_model_and_selector() -> None:
+    listing = client.get("/api/lego/demos")
+    assert listing.status_code == 200
+    assert [model["model_id"] for model in listing.json()["models"]] == ["house", "robot"]
+
+    response = client.get("/api/lego/demo", params={"model": "robot"})
+    assert response.status_code == 200
+    result = response.json()
+    assert result["model_id"] == "robot"
+    assert result["model_name"] == "Brickify Robot"
+    assert result["dimensions"] == [9, 12, 5]
+    assert result["voxel_count"] == result["covered_voxels"]
+    assert result["parts"]
+
+
+def test_unknown_demo_model_returns_404() -> None:
+    response = client.get("/api/lego/demo", params={"model": "unknown"})
+
+    assert response.status_code == 404
+    assert "Unknown demo model" in response.json()["detail"]

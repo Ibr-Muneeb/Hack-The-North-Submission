@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import PartsPanel from "./components/PartsPanel.jsx";
 import LegoViewer from "./viewer/LegoViewer.jsx";
 
 
@@ -6,18 +7,21 @@ export default function App() {
   const [model, setModel] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [demos, setDemos] = useState([]);
+  const [selectedDemo, setSelectedDemo] = useState("house");
   const [autoRotate, setAutoRotate] = useState(true);
   const [resetSignal, setResetSignal] = useState(0);
 
-  async function loadDemo() {
+  async function loadDemo(modelId = selectedDemo) {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch("/api/lego/demo");
+      const response = await fetch(`/api/lego/demo?model=${encodeURIComponent(modelId)}`);
       if (!response.ok) {
         throw new Error(`Backend returned ${response.status}`);
       }
       setModel(await response.json());
+      setResetSignal((value) => value + 1);
     } catch (loadError) {
       setError(
         `Could not load the LEGO demo. Make sure the FastAPI backend is running. ${loadError.message}`,
@@ -28,8 +32,27 @@ export default function App() {
   }
 
   useEffect(() => {
-    loadDemo();
+    async function initialize() {
+      try {
+        const response = await fetch("/api/lego/demos");
+        if (response.ok) {
+          const result = await response.json();
+          setDemos(result.models);
+        }
+      } catch {
+        // The model request below provides the actionable backend error state.
+      }
+      await loadDemo("house");
+    }
+
+    initialize();
   }, []);
+
+  function selectDemo(event) {
+    const modelId = event.target.value;
+    setSelectedDemo(modelId);
+    loadDemo(modelId);
+  }
 
   return (
     <main className="app-shell">
@@ -56,6 +79,17 @@ export default function App() {
             <h2>{model?.model_name ?? "LEGO model"}</h2>
           </div>
           <div className="viewer-actions">
+            <label className="model-select">
+              <span>Model</span>
+              <select value={selectedDemo} onChange={selectDemo}>
+                {(demos.length ? demos : [{ model_id: "house", model_name: "Brickify House" }])
+                  .map((demo) => (
+                    <option key={demo.model_id} value={demo.model_id}>
+                      {demo.model_name}
+                    </option>
+                  ))}
+              </select>
+            </label>
             <button type="button" onClick={() => setResetSignal((value) => value + 1)}>
               Reset camera
             </button>
@@ -70,22 +104,25 @@ export default function App() {
           </div>
         </div>
 
-        <div className="viewer-frame">
-          {loading && <div className="status-message">Assembling bricks…</div>}
-          {error && (
-            <div className="status-message error-message">
-              <p>{error}</p>
-              <button type="button" onClick={loadDemo}>Try again</button>
-            </div>
-          )}
-          {model && !loading && !error && (
-            <LegoViewer
-              model={model}
-              autoRotate={autoRotate}
-              resetSignal={resetSignal}
-            />
-          )}
-          <p className="interaction-hint">Drag to rotate · Scroll to zoom · Right-drag to pan</p>
+        <div className="model-workspace">
+          <div className="viewer-frame">
+            {loading && <div className="status-message">Assembling bricks…</div>}
+            {error && (
+              <div className="status-message error-message">
+                <p>{error}</p>
+                <button type="button" onClick={() => loadDemo(selectedDemo)}>Try again</button>
+              </div>
+            )}
+            {model && !loading && !error && (
+              <LegoViewer
+                model={model}
+                autoRotate={autoRotate}
+                resetSignal={resetSignal}
+              />
+            )}
+            <p className="interaction-hint">Drag to rotate · Scroll to zoom · Right-drag to pan</p>
+          </div>
+          {model && <PartsPanel model={model} />}
         </div>
 
         {model && (
@@ -101,6 +138,14 @@ export default function App() {
             <div>
               <dt>Grid dimensions</dt>
               <dd>{model.dimensions.join(" × ")}</dd>
+            </div>
+            <div>
+              <dt>Piece types</dt>
+              <dd>{model.statistics.unique_piece_types}</dd>
+            </div>
+            <div>
+              <dt>Colors</dt>
+              <dd>{model.statistics.color_count}</dd>
             </div>
           </dl>
         )}
